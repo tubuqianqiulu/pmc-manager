@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from common.config import settings
-from common.database import Base, engine, get_db
+from common.database import Base, engine, get_db, init_db
 from common.models import User
 from common.security import create_token, get_current_user, hash_password, require_internal, verify_password
 
@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    init_db()
     db = next(get_db())
     if not db.query(User).filter(User.username == "admin").first():
         db.add(User(username="admin", password_hash=hash_password("admin123"), name="系统管理员", role="admin"))
@@ -62,3 +62,9 @@ def register(body: LoginIn, _internal: None = Depends(require_internal), db: Ses
 @app.get("/healthz", tags=["ops"])
 def health():
     return {"service": "auth", "status": "ok"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("services.auth.main:app", host="0.0.0.0", port=8001)

@@ -134,3 +134,9 @@ def root():
 @app.get("/healthz")
 def health():
     return {"service": "gateway", "status": "ok"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("gateway.main:app", host="0.0.0.0", port=8000)

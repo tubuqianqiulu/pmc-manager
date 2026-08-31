@@ -11,7 +11,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from common.config import settings
-from common.database import Base, engine, get_db
+from common.database import Base, engine, get_db, init_db
 from common.models import OperationLog, PmcRecord
 from common.rabbit import publish
 from common.security import require_internal
@@ -24,7 +24,7 @@ CHANNEL_CHANGED = "pmc.data.changed"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    init_db()
     yield
 
 
@@ -142,3 +142,9 @@ def export_csv(module: str, _: None = Depends(require_internal), db: Session = D
 @app.get("/healthz", tags=["ops"])
 def health():
     return {"service": "pmc", "status": "ok"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("services.pmc.main:app", host="0.0.0.0", port=8002)

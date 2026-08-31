@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from sqlalchemy.orm import Session
 
-from common.database import Base, engine, get_db
+from common.database import Base, engine, get_db, init_db
 from common.models import PmcRecord, WarningRecord
 from common.security import require_internal
 
@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    init_db()
     yield
 
 
@@ -64,3 +64,9 @@ def module_summary(module: str, _: None = Depends(require_internal), db: Session
 @app.get("/healthz", tags=["ops"])
 def health():
     return {"service": "report", "status": "ok"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("services.report.main:app", host="0.0.0.0", port=8004)

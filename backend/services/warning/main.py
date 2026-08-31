@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from common.config import settings
-from common.database import Base, engine, get_db
+from common.database import Base, engine, get_db, init_db
 from common.models import PmcRecord, WarningRecord
 from common.rabbit import publish, start_consumer
 from common.security import require_internal
@@ -23,7 +23,7 @@ DAY = 86400
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    init_db()
     start_consumer(settings.rabbitmq_url, CHANNEL_CHANGED, on_event, enabled=settings.rabbitmq_enabled)
     yield
 
@@ -162,3 +162,9 @@ def handle(warning_id: int, body: HandleIn, _: None = Depends(require_internal),
 @app.get("/healthz", tags=["ops"])
 def health():
     return {"service": "warning", "status": "ok"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("services.warning.main:app", host="0.0.0.0", port=8003)
