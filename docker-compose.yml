@@ -14,7 +14,6 @@ x-backend-env: &backend-env
 services:
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
-    container_name: pmc-rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
@@ -30,7 +29,6 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: pmc-postgres
     environment:
       POSTGRES_USER: pmc
       POSTGRES_PASSWORD: pmc_pass
@@ -46,7 +44,6 @@ services:
 
   auth-service:
     build: ./backend
-    container_name: pmc-auth
     command: uvicorn services.auth.main:app --host 0.0.0.0 --port 8001
     environment:
       <<: *backend-env
@@ -58,7 +55,6 @@ services:
 
   pmc-service:
     build: ./backend
-    container_name: pmc-data
     command: uvicorn services.pmc.main:app --host 0.0.0.0 --port 8002
     environment:
       <<: *backend-env
@@ -72,7 +68,6 @@ services:
 
   warning-service:
     build: ./backend
-    container_name: pmc-warning
     command: uvicorn services.warning.main:app --host 0.0.0.0 --port 8003
     environment:
       <<: *backend-env
@@ -86,7 +81,6 @@ services:
 
   report-service:
     build: ./backend
-    container_name: pmc-report
     command: uvicorn services.report.main:app --host 0.0.0.0 --port 8004
     environment:
       <<: *backend-env
@@ -98,7 +92,6 @@ services:
 
   gateway:
     build: ./backend
-    container_name: pmc-gateway
     command: uvicorn gateway.main:app --host 0.0.0.0 --port 8000
     environment:
       <<: *backend-env
@@ -124,7 +117,6 @@ services:
 
   frontend:
     build: ./frontend
-    container_name: pmc-frontend
     ports:
       - "8080:80"
     depends_on:

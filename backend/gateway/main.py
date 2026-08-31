@@ -18,7 +18,7 @@ from common.security import decode_token
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("gateway")
 
-app = FastAPI(title="PMC API Gateway", version="1.0.0")
+app = FastAPI(title="PMC API Gateway", version="1.0.0", redirect_slashes=False)
 
 # ---------- 限流 ----------
 limiter = Limiter(key_func=get_remote_address, default_limits=[settings.rate_limit])
@@ -78,9 +78,7 @@ SERVICES = {
 _WHITELIST = {("auth", "login"), ("auth", "register")}
 
 
-@app.api_route("/api/{service}/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-@limiter.limit(settings.rate_limit)
-async def proxy(request: Request, service: str, path: str):
+async def _proxy(request: Request, service: str, path: str):
     base = SERVICES.get(service)
     if not base:
         raise HTTPException(404, "未知服务")
@@ -93,7 +91,7 @@ async def proxy(request: Request, service: str, path: str):
             raise HTTPException(401, "未登录")
         decode_token(token)  # 无效/过期则抛 401
 
-    url = f"{base}/api/{service}/{path}"
+    url = f"{base}/api/{service}" + (f"/{path}" if path else "")
     if request.url.query:
         url += "?" + request.url.query
 
@@ -114,6 +112,18 @@ async def proxy(request: Request, service: str, path: str):
 
     media = resp.headers.get("content-type", "application/json")
     return Response(content=resp.content, status_code=resp.status_code, media_type=media)
+
+
+@app.api_route("/api/{service}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+@limiter.limit(settings.rate_limit)
+async def proxy_bare(request: Request, service: str):
+    return await _proxy(request, service, "")
+
+
+@app.api_route("/api/{service}/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+@limiter.limit(settings.rate_limit)
+async def proxy(request: Request, service: str, path: str):
+    return await _proxy(request, service, path)
 
 
 @app.get("/")
