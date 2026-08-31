@@ -39,6 +39,7 @@ services:
 
   gateway:
     image: ghcr.io/tubuqianqiulu/pmc-manager-gateway:latest
+    command: uvicorn gateway.main:app --host 0.0.0.0 --port 8000
     environment:
       <<: *backend-env
       AUTH_SERVICE_URL: http://auth-service:8001
@@ -60,6 +61,7 @@ services:
 
   auth-service:
     image: ghcr.io/tubuqianqiulu/pmc-manager-auth-service:latest
+    command: uvicorn services.auth.main:app --host 0.0.0.0 --port 8001
     environment: *backend-env
     restart: unless-stopped
     depends_on:
@@ -68,6 +70,7 @@ services:
 
   pmc-service:
     image: ghcr.io/tubuqianqiulu/pmc-manager-pmc-service:latest
+    command: uvicorn services.pmc.main:app --host 0.0.0.0 --port 8002
     environment: *backend-env
     restart: unless-stopped
     depends_on:
@@ -78,6 +81,7 @@ services:
 
   warning-service:
     image: ghcr.io/tubuqianqiulu/pmc-manager-warning-service:latest
+    command: uvicorn services.warning.main:app --host 0.0.0.0 --port 8003
     environment: *backend-env
     restart: unless-stopped
     depends_on:
@@ -88,6 +92,7 @@ services:
 
   report-service:
     image: ghcr.io/tubuqianqiulu/pmc-manager-report-service:latest
+    command: uvicorn services.report.main:app --host 0.0.0.0 --port 8004
     environment: *backend-env
     restart: unless-stopped
     depends_on:
