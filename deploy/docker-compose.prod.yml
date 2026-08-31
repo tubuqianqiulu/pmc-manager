@@ -1,0 +1,128 @@
+# ============================================================
+# PMC 管理工作台 - 生产部署编排（公网版）
+# 与本地 docker-compose.yml 的区别：
+#   1) 使用 ghcr.io 镜像（云端拉取）
+#   2) 前端/网关/RabbitMQ/Postgres 全部不直接暴露公网，
+#      统一由 Caddy 反代 80/443，自动 HTTPS
+#   3) 需在 .env 中设置强密码
+#
+# 用法：见 deploy/DEPLOY.md
+# ============================================================
+name: pmc-manager-prod
+
+x-backend-env: &backend-env
+  JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置强 JWT_SECRET}
+  INTERNAL_TOKEN: ${INTERNAL_TOKEN:?请在 .env 中设置 INTERNAL_TOKEN}
+  DATABASE_URL: postgresql+psycopg2://pmc:${DB_PASSWORD:?请在 .env 中设置 DB_PASSWORD}@postgres:5432/pmc
+  RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+  RABBITMQ_ENABLED: "true"
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+    restart: unless-stopped
+
+  frontend:
+    image: ghcr.io/tubuqianqiulu/pmc-manager-frontend:latest
+    restart: unless-stopped
+    depends_on:
+      - gateway
+
+  gateway:
+    image: ghcr.io/tubuqianqiulu/pmc-manager-gateway:latest
+    environment:
+      <<: *backend-env
+      AUTH_SERVICE_URL: http://auth-service:8001
+      PMC_SERVICE_URL: http://pmc-service:8002
+      WARNING_SERVICE_URL: http://warning-service:8003
+      REPORT_SERVICE_URL: http://report-service:8004
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      RATE_LIMIT: ${RATE_LIMIT:-120/minute}
+    restart: unless-stopped
+    depends_on:
+      auth-service:
+        condition: service_started
+      pmc-service:
+        condition: service_started
+      warning-service:
+        condition: service_started
+      report-service:
+        condition: service_started
+
+  auth-service:
+    image: ghcr.io/tubuqianqiulu/pmc-manager-auth-service:latest
+    environment: *backend-env
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  pmc-service:
+    image: ghcr.io/tubuqianqiulu/pmc-manager-pmc-service:latest
+    environment: *backend-env
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  warning-service:
+    image: ghcr.io/tubuqianqiulu/pmc-manager-warning-service:latest
+    environment: *backend-env
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  report-service:
+    image: ghcr.io/tubuqianqiulu/pmc-manager-report-service:latest
+    environment: *backend-env
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+    # 生产不建议对外暴露 15672；如需管理台可通过 SSH 隧道访问
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pmc
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?请在 .env 中设置 DB_PASSWORD}
+      POSTGRES_DB: pmc
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pmc -d pmc"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

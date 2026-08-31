@@ -1,0 +1,25 @@
+# PMC 管理工作台 - Caddy 自动 HTTPS 配置
+# 把下面的 pmc.example.com 换成你的域名（需要先解析到服务器 IP）
+# 若无域名：可先用服务器 IP 访问（见 DEPLOY.md 备选），并删除下面第 1 行到第 4 行
+pmc.example.com {
+	encode gzip
+
+	# 静态资源与前端 SPA
+	handle {
+		reverse_proxy frontend:80
+	}
+
+	# 全站 API 由前端 Nginx 内部转发到网关，此处无需单独配置
+	# 如需直接暴露网关文档，可去掉下行注释（生产建议关闭）
+	# handle /docs* {
+	# 	reverse_proxy gateway:8000
+	# }
+
+	# 基础安全响应头
+	header {
+		-X-Server
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+	}
+}
