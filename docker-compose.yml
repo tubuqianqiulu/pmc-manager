@@ -1,0 +1,136 @@
+# PMC 管理工作台 - 全栈编排
+# 架构：前端(Vue3/Nginx) → 网关(FastAPI) → 各微服务(FastAPI) → Postgres + RabbitMQ
+# 使用：docker compose up -d --build
+# 访问：前端 http://localhost:8080  网关 http://localhost:8000/docs   RabbitMQ 控制台 http://localhost:15672
+name: pmc-manager
+
+x-backend-env: &backend-env
+  JWT_SECRET: ${JWT_SECRET:-please-change-jwt-secret}
+  INTERNAL_TOKEN: ${INTERNAL_TOKEN:-internal-pmc-token-change-me}
+  DATABASE_URL: postgresql+psycopg2://pmc:pmc_pass@postgres:5432/pmc
+  RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+  RABBITMQ_ENABLED: "true"
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: pmc-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: pmc-postgres
+    environment:
+      POSTGRES_USER: pmc
+      POSTGRES_PASSWORD: pmc_pass
+      POSTGRES_DB: pmc
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pmc -d pmc"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
+  auth-service:
+    build: ./backend
+    container_name: pmc-auth
+    command: uvicorn services.auth.main:app --host 0.0.0.0 --port 8001
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: auth-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  pmc-service:
+    build: ./backend
+    container_name: pmc-data
+    command: uvicorn services.pmc.main:app --host 0.0.0.0 --port 8002
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: pmc-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  warning-service:
+    build: ./backend
+    container_name: pmc-warning
+    command: uvicorn services.warning.main:app --host 0.0.0.0 --port 8003
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: warning-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  report-service:
+    build: ./backend
+    container_name: pmc-report
+    command: uvicorn services.report.main:app --host 0.0.0.0 --port 8004
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: report-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  gateway:
+    build: ./backend
+    container_name: pmc-gateway
+    command: uvicorn gateway.main:app --host 0.0.0.0 --port 8000
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: gateway
+      AUTH_SERVICE_URL: http://auth-service:8001
+      PMC_SERVICE_URL: http://pmc-service:8002
+      WARNING_SERVICE_URL: http://warning-service:8003
+      REPORT_SERVICE_URL: http://report-service:8004
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      RATE_LIMIT: ${RATE_LIMIT:-120/minute}
+    ports:
+      - "8000:8000"
+    depends_on:
+      auth-service:
+        condition: service_started
+      pmc-service:
+        condition: service_started
+      warning-service:
+        condition: service_started
+      report-service:
+        condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: pmc-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      gateway:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  pgdata:
