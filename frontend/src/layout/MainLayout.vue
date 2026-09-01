@@ -25,6 +25,7 @@ import { useData, useSettings } from '../store/index.js'
 import { runWarningEngine } from '../utils/warning.js'
 import { seedIfEmpty } from '../data/seed.js'
 import { loadJSON, saveJSON } from '../utils/storage.js'
+import { isServer } from '../utils/mode.js'
 
 const route = useRoute()
 const dataStore = useData()
@@ -48,15 +49,18 @@ function onSidebarSelect() {
 }
 
 onMounted(() => {
+  // 服务端模式：数据从后端加载，不走本地播种与本地预警引擎
+  if (isServer()) return
   seedIfEmpty(dataStore)
   runWarningEngine(dataStore, settingsStore.settings)
 })
 
-// 数据变化后延迟重新计算预警（防抖）
+// 数据变化后延迟重新计算预警（防抖）—— 仅本地模式
 let warnTimer = null
 watch(
   () => dataStore.data,
   () => {
+    if (isServer()) return
     clearTimeout(warnTimer)
     warnTimer = setTimeout(() => runWarningEngine(dataStore, settingsStore.settings), 1500)
   },

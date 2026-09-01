@@ -87,14 +87,20 @@
 import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Refresh } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import BaseChart from '../components/BaseChart.vue'
 import { useData, useSettings, useLogs } from '../store/index.js'
 import { runWarningEngine } from '../utils/warning.js'
+import { warningApi } from '../api'
+import { isServer } from '../utils/mode.js'
 
 const router = useRouter()
 const dataStore = useData()
 const settingsStore = useSettings()
 const logs = useLogs()
+
+// 服务端模式：后端返回的预警数据（按模块分组）
+const warnData = ref([])
 
 const go = (p) => router.push(p)
 
@@ -184,8 +190,18 @@ const WARN_MODULES = [
   { key: 'warn_stocktake', label: '盘点到期', color: '#409eff' }
 ]
 
-const warnBoard = computed(() =>
-  WARN_MODULES.map((w) => {
+const warnBoard = computed(() => {
+  if (isServer()) {
+    return WARN_MODULES.map((w) => {
+      const rows = warnData.value.filter((r) => (r.module || '').endsWith(w.key) || (r.module || '').startsWith(w.key))
+      return {
+        ...w,
+        count: rows.length,
+        pending: rows.filter((r) => r.status !== '已消除' && r.status !== '已完成').length
+      }
+    })
+  }
+  return WARN_MODULES.map((w) => {
     const rows = dataStore.records(w.key).filter((r) => !r.archived)
     return {
       ...w,
@@ -193,9 +209,19 @@ const warnBoard = computed(() =>
       pending: rows.filter((r) => r['状态'] !== '已消除' && r['状态'] !== '已完成').length
     }
   })
-)
+})
 
-function refreshWarn() {
+async function refreshWarn() {
+  if (isServer()) {
+    try {
+      await warningApi.recalc()
+      await loadWarnings()
+      ElMessage.success('已重新计算预警')
+    } catch (e) {
+      ElMessage.error('重新计算失败')
+    }
+    return
+  }
   runWarningEngine(dataStore, settingsStore.settings)
   logs.add('操作', '预警看板', '手动重新计算预警')
 }
@@ -253,7 +279,25 @@ function toggleTodo(t, v) {
   dataStore.update('todo', t.id, { status: v ? '已完成' : '进行中' })
 }
 
-onMounted(() => {
+// 服务端模式：加载后端预警
+async function loadWarnings() {
+  try {
+    const res = await warningApi.list({ limit: 300 })
+    warnData.value = res.items || []
+  } catch (e) { /* 忽略 */ }
+}
+
+const DASHBOARD_MODULES = [
+  'plan_achieve', 'work_order', 'mrp', 'report_capacity',
+  'raw_inventory', 'finished_inventory', 'wip_inventory', 'todo', 'sales_order'
+]
+
+onMounted(async () => {
+  if (isServer()) {
+    await dataStore.loadAll(DASHBOARD_MODULES)
+    await loadWarnings()
+    return
+  }
   runWarningEngine(dataStore, settingsStore.settings)
 })
 </script>

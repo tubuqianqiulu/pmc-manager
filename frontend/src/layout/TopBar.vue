@@ -8,28 +8,51 @@
       <span class="tb-mode" :class="mode">{{ mode === 'server' ? '服务端模式' : '纯本地模式' }}</span>
       <span class="tb-save" v-if="savedAt">已自动保存 {{ savedAt }}</span>
       <span class="tb-date">{{ today }}</span>
-      <el-avatar :size="28" class="tb-avatar">{{ (profile.name || '师').slice(0, 1) }}</el-avatar>
-      <span class="tb-user">{{ profile.name || '大师哥' }}</span>
+      <template v-if="isServer">
+        <el-avatar :size="28" class="tb-avatar">{{ (user && (user.name || user.username) || '师').slice(0, 1) }}</el-avatar>
+        <span class="tb-user">{{ (user && (user.name || user.username)) || '' }}</span>
+        <el-tag v-if="user && user.role === 'admin'" size="small" type="danger" effect="plain">超级用户</el-tag>
+        <el-tag v-else size="small" type="info" effect="plain">普通用户</el-tag>
+        <el-button link type="danger" size="small" @click="logout">退出</el-button>
+      </template>
+      <template v-else>
+        <el-avatar :size="28" class="tb-avatar">{{ (profile.name || '师').slice(0, 1) }}</el-avatar>
+        <span class="tb-user">{{ profile.name || '大师哥' }}</span>
+      </template>
     </div>
   </header>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
+import { ElMessageBox } from 'element-plus'
 import { useData, useSettings } from '../store/index.js'
+import { isServer, currentUser, clearAuth } from '../utils/mode.js'
 
 defineProps({
   collapsed: { type: Boolean, default: false }
 })
 defineEmits(['toggle'])
 
+const router = useRouter()
 const dataStore = useData()
 const settingsStore = useSettings()
 const { settings } = storeToRefs(settingsStore)
 const savedAt = computed(() => dataStore.savedAt)
 const profile = computed(() => settings.value.profile || {})
 const mode = import.meta.env.VITE_MODE || 'local'
+const user = computed(() => currentUser())
+
+function logout() {
+  ElMessageBox.confirm('确定退出登录吗？', '退出确认', { type: 'warning' })
+    .then(() => {
+      clearAuth()
+      router.push('/login')
+    })
+    .catch(() => {})
+}
 
 const today = ref(
   new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })

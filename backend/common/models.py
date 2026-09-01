@@ -22,11 +22,12 @@ class User(Base):
 
 
 class PmcRecord(Base):
-    """通用业务记录：module 为模块 key，data 为 JSON 字段"""
+    """通用业务记录：module 为模块 key，data 为 JSON 字段；owner 为归属用户（admin 可见全部）"""
     __tablename__ = "pmc_records"
     id = Column(Integer, primary_key=True, autoincrement=True)
     module = Column(String(64), index=True, nullable=False)
     data = Column(JSON, nullable=False, default=dict)
+    owner = Column(String(64), index=True, default="")
     archived = Column(Integer, default=0)
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)

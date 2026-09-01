@@ -1,6 +1,19 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
+import { isServer, getToken } from '../utils/mode'
 
 const routes = [
+  {
+    path: '/login',
+    name: 'login',
+    component: () => import('../views/auth/LoginPage.vue'),
+    meta: { title: '登录' }
+  },
+  {
+    path: '/register',
+    name: 'register',
+    component: () => import('../views/auth/RegisterPage.vue'),
+    meta: { title: '注册' }
+  },
   {
     path: '/',
     component: () => import('../layout/MainLayout.vue'),
@@ -20,6 +33,16 @@ const routes = [
 const router = createRouter({
   history: createWebHashHistory(),
   routes
+})
+
+// 登录守卫：server 模式必须登录后才能进入工作台
+router.beforeEach((to) => {
+  if (!isServer()) return true
+  const token = getToken()
+  const isAuthPage = to.path === '/login' || to.path === '/register'
+  if (!token && !isAuthPage) return '/login'
+  if (token && isAuthPage) return '/'
+  return true
 })
 
 router.afterEach((to) => {

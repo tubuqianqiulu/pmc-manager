@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { loadJSON, saveJSON } from '../utils/storage'
 import { genId } from '../utils/export'
+import { pmcApi } from '../api'
+import { isServer } from '../utils/mode'
 
 const DATA_KEY = 'pmc_data_v1'
 const SETTINGS_KEY = 'pmc_settings_v1'
@@ -8,28 +10,65 @@ const LOG_KEY = 'pmc_logs_v1'
 
 const now = () => new Date().toISOString()
 
-/* ---------------- 业务数据 store（所有模块的数据） ---------------- */
+/* ---------------- 业务数据 store（所有模块的数据） ----------------
+ * local 模式：数据存 localStorage
+ * server 模式：数据从后端 API 加载（内存缓存），增删改走后端，按登录用户归属隔离
+ */
 export const useData = defineStore('data', {
   state: () => ({
     data: loadJSON(DATA_KEY, {}),
-    savedAt: ''
+    savedAt: '',
+    loaded: {} // server 模式：已加载的模块集合
   }),
   actions: {
     records(key) {
       return this.data[key] || []
     },
     _persist() {
+      if (isServer()) return // server 模式以服务端为准，不落 localStorage
       saveJSON(DATA_KEY, this.data)
       this.savedAt = new Date().toLocaleTimeString('zh-CN', { hour12: false })
     },
-    add(key, rec) {
+    /* ---- server 模式：从后端加载一个模块（含已归档） ---- */
+    async load(key) {
+      if (!isServer()) return
+      try {
+        const [a, b] = await Promise.all([
+          pmcApi.list(key, { archived: 0, size: 200 }),
+          pmcApi.list(key, { archived: 1, size: 200 })
+        ])
+        const items = [...(a.items || []), ...(b.items || [])]
+        this.data[key] = items
+        this.loaded[key] = true
+        this.savedAt = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+      } catch (e) {
+        console.error('加载模块失败', key, e)
+        this.loaded[key] = true
+      }
+    },
+    async loadAll(keys) {
+      if (!isServer()) return
+      await Promise.all(keys.map((k) => this.load(k)))
+    },
+    /* ---- 增删改（server 模式走后端，local 模式走本地） ---- */
+    async add(key, rec) {
+      if (isServer()) {
+        await pmcApi.create(key, rec)
+        await this.load(key)
+        return rec
+      }
       const row = { id: genId(), status: rec.status || '进行中', archived: false, createdAt: now(), updatedAt: now(), ...rec }
       if (!this.data[key]) this.data[key] = []
       this.data[key].unshift(row)
       this._persist()
       return row
     },
-    update(key, id, patch) {
+    async update(key, id, patch) {
+      if (isServer()) {
+        await pmcApi.update(key, id, patch)
+        await this.load(key)
+        return
+      }
       const list = this.data[key] || []
       const i = list.findIndex((r) => r.id === id)
       if (i > -1) {
@@ -37,19 +76,43 @@ export const useData = defineStore('data', {
         this._persist()
       }
     },
-    remove(key, ids) {
+    async remove(key, ids) {
+      if (isServer()) {
+        for (const id of ids) await pmcApi.remove(key, id)
+        await this.load(key)
+        return
+      }
       const set = new Set(ids)
       this.data[key] = (this.data[key] || []).filter((r) => !set.has(r.id))
       this._persist()
     },
-    setArchived(key, ids, val) {
+    async setArchived(key, ids, val) {
+      if (isServer()) {
+        // 后端 archive 接口是翻转：根据当前状态决定是否调用
+        const list = this.data[key] || []
+        for (const id of ids) {
+          const row = list.find((r) => r.id === id)
+          if (row && Boolean(row.archived) !== val) await pmcApi.archive(key, id)
+        }
+        await this.load(key)
+        return
+      }
       const set = new Set(ids)
       this.data[key] = (this.data[key] || []).map((r) =>
         set.has(r.id) ? { ...r, archived: val, updatedAt: now() } : r
       )
       this._persist()
     },
-    importRows(key, rows) {
+    async importRows(key, rows) {
+      if (isServer()) {
+        let n = 0
+        for (const r of rows) {
+          await pmcApi.create(key, r)
+          n++
+        }
+        await this.load(key)
+        return n
+      }
       if (!this.data[key]) this.data[key] = []
       const t = now()
       const mapped = rows.map((r) => ({ id: genId(), status: r.status || '进行中', archived: false, createdAt: t, updatedAt: t, ...r }))
@@ -61,7 +124,17 @@ export const useData = defineStore('data', {
       this.data = data || {}
       this._persist()
     },
-    resetModule(key) {
+    async resetModule(key) {
+      if (isServer()) {
+        const list = this.data[key] || []
+        for (const r of list) {
+          try {
+            await pmcApi.remove(key, r.id)
+          } catch (e) { /* 跳过无权限的 */ }
+        }
+        await this.load(key)
+        return
+      }
       delete this.data[key]
       this._persist()
     },

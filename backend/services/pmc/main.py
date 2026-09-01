@@ -14,12 +14,26 @@ from common.config import settings
 from common.database import Base, engine, get_db, init_db
 from common.models import OperationLog, PmcRecord
 from common.rabbit import publish
-from common.security import require_internal
+from common.security import get_current_user, require_internal
 
 logger = logging.getLogger("pmc")
 logging.basicConfig(level=logging.INFO)
 
 CHANNEL_CHANGED = "pmc.data.changed"
+
+
+def _can_modify(user: dict, rec: PmcRecord) -> bool:
+    """权限：admin 可改删全部；普通用户仅可改删自己添加的"""
+    if user.get("role") == "admin":
+        return True
+    return rec.owner == user.get("username")
+
+
+def _scope_query(query, user: dict):
+    """数据范围：admin 见全部；普通用户仅见自己添加的"""
+    if user.get("role") == "admin":
+        return query
+    return query.filter(PmcRecord.owner == user.get("username"))
 
 
 @asynccontextmanager
@@ -45,8 +59,11 @@ def _emit(module: str, action: str, record_id: int | None = None):
 
 
 @app.get("/api/pmc/modules", tags=["pmc"])
-def list_modules(_: None = Depends(require_internal), db: Session = Depends(get_db)):
-    rows = db.query(PmcRecord.module).distinct().all()
+def list_modules(_: None = Depends(require_internal), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    query = db.query(PmcRecord.module).distinct()
+    if user.get("role") != "admin":
+        query = query.filter(PmcRecord.owner == user.get("username"))
+    rows = query.all()
     return {"modules": [r[0] for r in rows]}
 
 
@@ -54,6 +71,7 @@ def list_modules(_: None = Depends(require_internal), db: Session = Depends(get_
 def list_records(
     module: str,
     _: None = Depends(require_internal),
+    user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
     archived: int = Query(0, ge=0, le=1),
     q: str = "",
@@ -61,31 +79,34 @@ def list_records(
     size: int = Query(20, ge=1, le=200),
 ):
     query = db.query(PmcRecord).filter(PmcRecord.module == module, PmcRecord.archived == archived)
+    query = _scope_query(query, user)
     if q:
         like = f"%{q}%"
         query = query.filter(or_(PmcRecord.data.cast(str).like(like)))
     total = query.count()
     rows = query.order_by(PmcRecord.id.desc()).offset((page - 1) * size).limit(size).all()
-    return {"total": total, "items": [{**r.data, "id": r.id, "archived": r.archived} for r in rows]}
+    return {"total": total, "items": [{**r.data, "id": r.id, "owner": r.owner, "archived": r.archived} for r in rows]}
 
 
 @app.post("/api/pmc/{module}", tags=["pmc"], status_code=201)
-def create_record(module: str, body: RecordIn, _: None = Depends(require_internal), db: Session = Depends(get_db)):
-    rec = PmcRecord(module=module, data=body.data)
+def create_record(module: str, body: RecordIn, _: None = Depends(require_internal), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    rec = PmcRecord(module=module, data=body.data, owner=user.get("username") or "")
     db.add(rec)
     db.commit()
     db.refresh(rec)
     _emit(module, "create", rec.id)
-    db.add(OperationLog(user="api", op="新增", target=module, detail=json.dumps(body.data, ensure_ascii=False)[:500]))
+    db.add(OperationLog(user=user.get("username", "api"), op="新增", target=module, detail=json.dumps(body.data, ensure_ascii=False)[:500]))
     db.commit()
     return {"id": rec.id}
 
 
 @app.put("/api/pmc/{module}/{record_id}", tags=["pmc"])
-def update_record(module: str, record_id: int, body: RecordIn, _: None = Depends(require_internal), db: Session = Depends(get_db)):
+def update_record(module: str, record_id: int, body: RecordIn, _: None = Depends(require_internal), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     rec = db.query(PmcRecord).filter(PmcRecord.id == record_id, PmcRecord.module == module).first()
     if not rec:
         raise HTTPException(404, "记录不存在")
+    if not _can_modify(user, rec):
+        raise HTTPException(403, "无权限：只能修改自己添加的数据")
     rec.data = body.data
     db.commit()
     _emit(module, "update", record_id)
@@ -93,10 +114,12 @@ def update_record(module: str, record_id: int, body: RecordIn, _: None = Depends
 
 
 @app.delete("/api/pmc/{module}/{record_id}", tags=["pmc"])
-def delete_record(module: str, record_id: int, _: None = Depends(require_internal), db: Session = Depends(get_db)):
+def delete_record(module: str, record_id: int, _: None = Depends(require_internal), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     rec = db.query(PmcRecord).filter(PmcRecord.id == record_id, PmcRecord.module == module).first()
     if not rec:
         raise HTTPException(404, "记录不存在")
+    if not _can_modify(user, rec):
+        raise HTTPException(403, "无权限：只能删除自己添加的数据")
     db.delete(rec)
     db.commit()
     _emit(module, "delete", record_id)
@@ -104,10 +127,12 @@ def delete_record(module: str, record_id: int, _: None = Depends(require_interna
 
 
 @app.patch("/api/pmc/{module}/{record_id}/archive", tags=["pmc"])
-def archive_record(module: str, record_id: int, _: None = Depends(require_internal), db: Session = Depends(get_db)):
+def archive_record(module: str, record_id: int, _: None = Depends(require_internal), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     rec = db.query(PmcRecord).filter(PmcRecord.id == record_id, PmcRecord.module == module).first()
     if not rec:
         raise HTTPException(404, "记录不存在")
+    if not _can_modify(user, rec):
+        raise HTTPException(403, "无权限：只能归档自己添加的数据")
     rec.archived = 0 if rec.archived else 1
     db.commit()
     _emit(module, "archive", record_id)
@@ -115,8 +140,10 @@ def archive_record(module: str, record_id: int, _: None = Depends(require_intern
 
 
 @app.get("/api/pmc/export/{module}", tags=["pmc"])
-def export_csv(module: str, _: None = Depends(require_internal), db: Session = Depends(get_db)):
-    rows = db.query(PmcRecord).filter(PmcRecord.module == module).all()
+def export_csv(module: str, _: None = Depends(require_internal), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    query = db.query(PmcRecord).filter(PmcRecord.module == module)
+    query = _scope_query(query, user)
+    rows = query.all()
     if not rows:
         return Response(content="\uFEFF", media_type="text/csv; charset=utf-8")
     # 以所有记录键的并集作为表头

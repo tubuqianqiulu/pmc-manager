@@ -6,7 +6,7 @@
         {{ config.label }}
         <span class="muted">{{ filtered.length }} 条</span>
       </h3>
-      <span class="save-tip"><el-icon><CircleCheckFilled /></el-icon> 数据自动保存已开启</span>
+      <span class="save-tip"><el-icon><CircleCheckFilled /></el-icon> {{ isServer ? '服务端已连接 · 数据已共享' : '数据自动保存已开启' }}</span>
       <div class="spacer"></div>
       <el-input
         v-model="keyword"
@@ -48,6 +48,7 @@
     <!-- 表格 -->
     <div class="pmc-card">
       <el-table
+        v-loading="loading"
         :data="pageRows"
         border
         stripe
@@ -130,7 +131,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Plus, FolderAdd, Download, ArrowDown, CircleCheckFilled } from '@element-plus/icons-vue'
@@ -138,6 +139,7 @@ import { getModule } from '../data/modules/index.js'
 import { useData, useLogs, useSettings } from '../store/index.js'
 import { genNo } from '../utils/export.js'
 import { exportCSV, parseCSV, mapImportRows } from '../utils/export.js'
+import { isServer } from '../utils/mode.js'
 
 const props = defineProps({ moduleKey: { type: String, required: true } })
 const route = useRoute()
@@ -158,6 +160,23 @@ const editing = ref(false)
 const editId = ref(null)
 const form = ref({})
 const fileInput = ref(null)
+const loading = ref(false)
+
+// 服务端模式：进入页面时从后端加载该模块数据
+async function loadData() {
+  if (!isServer()) return
+  loading.value = true
+  try {
+    await dataStore.load(props.moduleKey)
+  } finally {
+    loading.value = false
+  }
+}
+onMounted(loadData)
+watch(() => props.moduleKey, () => {
+  page.value = 1
+  loadData()
+})
 
 // 支持从其他页面跳转携带查询：?kw=xx 或 ?status=active
 watch(
@@ -216,38 +235,61 @@ function openEdit(row) {
   dialog.value = true
 }
 
-function save() {
+async function save() {
   const payload = { ...form.value }
   // 去掉空串的日期/数字避免脏数据
   for (const k of Object.keys(payload)) if (payload[k] === '') payload[k] = null
-  if (editing.value) {
-    dataStore.update(props.moduleKey, editId.value, payload)
-    logs.add('编辑', config.value.label, payload[config.value.fields[0]?.key] || '')
-  } else {
-    dataStore.add(props.moduleKey, payload)
-    logs.add('新增', config.value.label, payload[config.value.fields[0]?.key] || '')
+  loading.value = true
+  try {
+    if (editing.value) {
+      await dataStore.update(props.moduleKey, editId.value, payload)
+      logs.add('编辑', config.value.label, payload[config.value.fields[0]?.key] || '')
+    } else {
+      await dataStore.add(props.moduleKey, payload)
+      logs.add('新增', config.value.label, payload[config.value.fields[0]?.key] || '')
+    }
+    dialog.value = false
+    ElMessage.success(isServer() ? '已保存到服务器（全员共享）' : '已保存（自动写入本地存储）')
+  } catch (e) {
+    const msg = (e.response && e.response.data && e.response.data.detail) || '保存失败'
+    ElMessage.error(msg)
+  } finally {
+    loading.value = false
   }
-  dialog.value = false
-  ElMessage.success('已保存（自动写入本地存储）')
 }
 
-function toggleArchive(row) {
-  dataStore.setArchived(props.moduleKey, [row.id], !row.archived)
-  logs.add(row.archived ? '恢复' : '归档', config.value.label, row[config.value.fields[0]?.key] || '')
-  ElMessage.success(row.archived ? '已恢复' : '已归档')
+async function toggleArchive(row) {
+  try {
+    await dataStore.setArchived(props.moduleKey, [row.id], !row.archived)
+    logs.add(row.archived ? '恢复' : '归档', config.value.label, row[config.value.fields[0]?.key] || '')
+    ElMessage.success(row.archived ? '已恢复' : '已归档')
+  } catch (e) {
+    const msg = (e.response && e.response.data && e.response.data.detail) || '操作失败'
+    ElMessage.error(msg)
+  }
 }
-function batchArchive() {
+async function batchArchive() {
   if (!selection.value.length) return ElMessage.warning('请先勾选数据')
-  dataStore.setArchived(props.moduleKey, selection.value.map((r) => r.id), true)
-  logs.add('批量归档', config.value.label, `${selection.value.length} 条`)
-  ElMessage.success(`已归档 ${selection.value.length} 条`)
+  try {
+    await dataStore.setArchived(props.moduleKey, selection.value.map((r) => r.id), true)
+    logs.add('批量归档', config.value.label, `${selection.value.length} 条`)
+    ElMessage.success(`已归档 ${selection.value.length} 条`)
+  } catch (e) {
+    const msg = (e.response && e.response.data && e.response.data.detail) || '操作失败'
+    ElMessage.error(msg)
+  }
 }
 function delOne(row) {
   ElMessageBox.confirm(`确定删除该条记录吗？删除后不可恢复。`, '删除确认', { type: 'warning' })
-    .then(() => {
-      dataStore.remove(props.moduleKey, [row.id])
-      logs.add('删除', config.value.label, row[config.value.fields[0]?.key] || '')
-      ElMessage.success('已删除')
+    .then(async () => {
+      try {
+        await dataStore.remove(props.moduleKey, [row.id])
+        logs.add('删除', config.value.label, row[config.value.fields[0]?.key] || '')
+        ElMessage.success('已删除')
+      } catch (e) {
+        const msg = (e.response && e.response.data && e.response.data.detail) || '删除失败'
+        ElMessage.error(msg)
+      }
     })
     .catch(() => {})
 }
@@ -256,10 +298,15 @@ function batchDelete() {
   ElMessageBox.confirm(`确定删除勾选的 ${selection.value.length} 条记录吗？删除后不可恢复。`, '删除确认', {
     type: 'warning'
   })
-    .then(() => {
-      dataStore.remove(props.moduleKey, selection.value.map((r) => r.id))
-      logs.add('批量删除', config.value.label, `${selection.value.length} 条`)
-      ElMessage.success('已删除')
+    .then(async () => {
+      try {
+        await dataStore.remove(props.moduleKey, selection.value.map((r) => r.id))
+        logs.add('批量删除', config.value.label, `${selection.value.length} 条`)
+        ElMessage.success('已删除')
+      } catch (e) {
+        const msg = (e.response && e.response.data && e.response.data.detail) || '删除失败'
+        ElMessage.error(msg)
+      }
     })
     .catch(() => {})
 }
@@ -276,10 +323,15 @@ function onMore(cmd) {
     ElMessageBox.confirm(`确定清空「${config.value.label}」全部 ${allRows.value.length} 条数据吗？建议先导出备份。`, '清空确认', {
       type: 'warning'
     })
-      .then(() => {
-        dataStore.resetModule(props.moduleKey)
-        logs.add('清空模块', config.value.label)
-        ElMessage.success('已清空')
+      .then(async () => {
+        try {
+          await dataStore.resetModule(props.moduleKey)
+          logs.add('清空模块', config.value.label)
+          ElMessage.success('已清空')
+        } catch (e) {
+          const msg = (e.response && e.response.data && e.response.data.detail) || '清空失败'
+          ElMessage.error(msg)
+        }
       })
       .catch(() => {})
   }
@@ -289,13 +341,13 @@ function onImport(e) {
   e.target.value = ''
   if (!file) return
   const reader = new FileReader()
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const rows = parseCSV(String(reader.result))
       if (!rows.length) return ElMessage.warning('文件为空或格式不正确')
       const header = rows[0]
       const mapped = mapImportRows(header, rows.slice(1), config.value.fields)
-      const n = dataStore.importRows(props.moduleKey, mapped)
+      const n = await dataStore.importRows(props.moduleKey, mapped)
       logs.add('导入', config.value.label, `${n} 条`)
       ElMessage.success(`成功导入 ${n} 条数据`)
     } catch (err) {
