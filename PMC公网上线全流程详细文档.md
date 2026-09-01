@@ -1,4 +1,4 @@
-# PMC 管理工作台 · 公网上线全流程详细文档（通俗详解版）
+﻿# PMC 管理工作台 · 公网上线全流程详细文档（通俗详解版）
 
 > **从服务器环境安装 → 项目部署 → 公网正式访问** 完整实录
 > 本版在每步操作前解释"这是在干嘛"，对每条命令拆解"装的是什么/干什么用"
@@ -444,7 +444,7 @@ https://pcm-personal.com/api/auth/login → 200（登录接口正常）✅
 | 项 | 值 |
 |---|---|
 | 正式地址 | https://pcm-personal.com |
-| 管理员账号 | admin / admin123（⚠️ 上线后尽快改！） |
+| 管理员账号 | admin / Pmc@Admin#2026（已改强密码；可在「系统设置→密码修改」自行更换） |
 | 公网 IP | 139.199.12.160 |
 | 实例 ID | lhins-8586ckll |
 | 服务器系统 | Ubuntu 22.04 LTS |
@@ -457,3 +457,91 @@ https://pcm-personal.com/api/auth/login → 200（登录接口正常）✅
 ---
 
 *文档结束 · 按此文档可在一台全新 Ubuntu 服务器上完整复现整个部署*
+
+
+---
+
+## 八、升级：共享模式 + 登录注册 + 数据权限隔离（2026-09-01）
+
+> **为什么升级**：原来前端是"纯本地模式"（数据存在每个人自己浏览器的 localStorage），别人打开网站看到的是空系统，各看各的、数据不共享。用户要求"让大家都能访问、共用同一份数据"，于是增加**登录注册**与**数据归属权限**：只有登录后才能进入，数据统一存在服务器数据库，每个人只能看到/修改/删除自己添加的数据，超级管理员（admin）可以管理全部。
+
+### 8.1 新架构说明
+
+| 项目 | 说明 |
+|---|---|
+| 前端模式 | 生产构建参数 `VITE_MODE=server`（服务端模式）：登录 + 所有 CRUD 走后端 API，不再用 localStorage |
+| 认证服务 | 仍由独立微服务 **auth** 承担（登录/注册/改密码/JWT 签发），不拆进其他服务 |
+| 数据归属 | 每张记录增加 `owner` 字段（记录创建者用户名） |
+| 权限模型 | **admin（超级用户）**：看全部 + 改/删全部；**普通用户**：只能看/改/删自己添加的，看别人 → 数据里不出现，改/删别人的 → HTTP 403 |
+| 注册 | 任何人可注册（网关白名单），注册后自动登录 |
+| 改密码 | 「系统设置 → 密码修改」在服务端模式下调用后端 `/api/auth/change-password`（需原密码） |
+
+### 8.2 数据库迁移（必须！新代码才会读 owner 列）
+
+```bash
+# 在服务器上执行（老表不会自动加列，必须手动加，否则服务启动 SELECT 报错）
+docker exec pmc-manager-prod-postgres-1 psql -U pmc -d pmc -c "ALTER TABLE pmc_records ADD COLUMN IF NOT EXISTS owner VARCHAR(64) DEFAULT '';"
+docker exec pmc-manager-prod-postgres-1 psql -U pmc -d pmc -c "CREATE INDEX IF NOT EXISTS ix_pmc_records_owner ON pmc_records(owner);"
+```
+
+### 8.3 重新构建并部署
+
+```bash
+cd /opt/pmc-manager
+# 后端代码变了 → 重新构建后端镜像（会依次打 auth/pmc/warning/report/gateway 五个标签）
+docker build -t pmc-backend:latest ./backend
+for svc in auth-service pmc-service warning-service report-service gateway; do
+  docker tag pmc-backend:latest ghcr.io/tubuqianqiulu/pmc-manager-$svc:latest
+done
+# 前端 → 用 VITE_MODE=server 构建（Dockerfile 已默认此参数）
+docker build -t ghcr.io/tubuqianqiulu/pmc-manager-frontend:latest ./frontend
+
+cd /opt/pmc-manager/deploy
+# 用新镜像强制重建全部容器
+docker compose -f docker-compose.prod.yml up -d --force-recreate
+```
+
+### 8.4 权限隔离验证清单（全自动脚本已跑通）
+
+| # | 验证 | 结果 |
+|---|---|---|
+| 1 | admin 登录获取令牌 | ✅ |
+| 2 | admin 新增记录（owner=admin） | ✅ |
+| 3 | 注册普通用户并登录 | ✅ |
+| 4 | 普通用户列表**看不到** admin 的记录（total=0） | ✅ |
+| 5 | 普通用户新增自己的记录（owner=自己） | ✅ |
+| 6 | 普通用户**修改 admin 的记录 → 403** | ✅ |
+| 7 | 普通用户**删除 admin 的记录 → 403** | ✅ |
+| 8 | 普通用户改/删自己的记录 → 200 | ✅ |
+| 9 | 未登录/无令牌访问业务接口 → 401 | ✅ |
+| 10 | 反爬（curl 等非浏览器 UA）→ 403 | ✅ |
+
+### 8.5 管理员密码已加固
+
+- 原默认 **admin / admin123** 是公开弱密码，已通过 `/api/auth/change-password` 改为 **Pmc@Admin#2026**
+- 旧密码立即失效（返回 401）
+- 可在网页「系统设置 → 密码修改」用原密码改成自己的
+
+### 8.6 这次代码改动清单（已推 GitHub commit a60c432）
+
+| 文件 | 改动 |
+|---|---|
+| `backend/common/models.py` | PmcRecord 增加 `owner` 列 |
+| `backend/services/pmc/main.py` | `_scope_query`（admin 全量/普通用户仅自己）+ `_can_modify`（403 校验）+ create 记 owner |
+| `backend/services/auth/main.py` | 新增 `/api/auth/change-password` 改密码接口 |
+| `frontend/src/utils/mode.js` | 运行模式/登录态/角色工具（新增） |
+| `frontend/src/views/auth/LoginPage.vue` / `RegisterPage.vue` | 登录页 / 注册页（新增） |
+| `frontend/src/router/index.js` | `/login` `/register` + 路由守卫（未登录跳登录页） |
+| `frontend/src/store/index.js` | 服务端模式全 CRUD 走后端 API，跳过 localStorage |
+| `frontend/src/components/CrudPage.vue` | 异步化 + 后端错误提示 |
+| `frontend/src/layout/TopBar.vue` | 显示当前用户/角色标签/退出登录 |
+| `frontend/src/layout/MainLayout.vue` | 服务端模式跳过本地 seed 与本地预警引擎 |
+| `frontend/src/views/Dashboard.vue` | 服务端模式接后端报表与预警接口 |
+| `frontend/src/api/index.js` | 新增 register / changePassword 客户端 |
+| `frontend/src/views/settings/SettingsPage.vue` | 密码修改在服务端模式调后端接口 |
+| `frontend/Dockerfile` | 支持 `ARG VITE_MODE=server` 生产构建 |
+
+---
+
+*文档结束 · 按此文可在全新 Ubuntu 服务器上完整复现整个部署*
+
