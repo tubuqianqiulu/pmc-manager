@@ -3,7 +3,7 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci || npm install
+RUN npm config set registry https://registry.npmmirror.com && npm ci || npm install
 COPY . .
 ARG VITE_MODE=server
 ENV VITE_MODE=$VITE_MODE

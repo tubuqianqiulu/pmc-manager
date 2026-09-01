@@ -28,7 +28,9 @@ http.interceptors.response.use(
 
 export const authApi = {
   login: (username, password) => http.post('/auth/login', { username, password }),
-  me: () => http.get('/auth/me')
+  me: () => http.get('/auth/me'),
+  register: (username, password) => http.post('/auth/register', { username, password }),
+  changePassword: (oldPassword, newPassword) => http.post('/auth/change-password', { old_password: oldPassword, new_password: newPassword })
 }
 
 export const pmcApi = {

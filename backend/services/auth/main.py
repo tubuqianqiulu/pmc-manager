@@ -59,6 +59,23 @@ def register(body: LoginIn, _internal: None = Depends(require_internal), db: Ses
     return {"ok": True, "username": body.username}
 
 
+class ChangePwdIn(BaseModel):
+    old_password: str
+    new_password: str
+
+
+@app.post("/api/auth/change-password", tags=["auth"])
+def change_password(body: ChangePwdIn, _internal: None = Depends(require_internal), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    u = db.query(User).filter(User.username == user.get("username")).first()
+    if not u or not verify_password(body.old_password, u.password_hash):
+        raise HTTPException(401, "原密码错误")
+    if len(body.new_password) < 6:
+        raise HTTPException(400, "新密码至少 6 位")
+    u.password_hash = hash_password(body.new_password)
+    db.commit()
+    return {"ok": True}
+
+
 @app.get("/healthz", tags=["ops"])
 def health():
     return {"service": "auth", "status": "ok"}

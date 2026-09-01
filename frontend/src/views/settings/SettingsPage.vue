@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="tool-tabs">
     <el-tabs v-model="tab" @tab-change="onTab">
       <!-- 个人信息修改 -->
@@ -18,7 +18,8 @@
       <!-- 密码修改设置 -->
       <el-tab-pane label="密码修改设置" name="password">
         <el-form :model="pwdForm" label-width="110px" style="max-width: 480px">
-          <el-form-item label="新密码"><el-input v-model="pwdForm.pwd" type="password" show-password placeholder="设置工作台访问密码（本地模式为演示功能）" /></el-form-item>
+          <el-form-item label="原密码"><el-input v-model="pwdForm.oldPwd" type="password" show-password placeholder="请输入当前登录密码" /></el-form-item>
+<el-form-item label="新密码"><el-input v-model="pwdForm.pwd" type="password" show-password placeholder="设置工作台访问密码" /></el-form-item>
           <el-form-item label="确认密码"><el-input v-model="pwdForm.confirm" type="password" show-password /></el-form-item>
           <el-form-item>
             <el-button type="primary" @click="savePwd">保存</el-button>
@@ -182,6 +183,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { modules } from '../../data/modules/index.js'
 import { useData, useSettings, useLogs } from '../../store/index.js'
+import { authApi } from '../../api/index.js'
+import { isServer } from '../../utils/mode.js'
 import { exportCSV, exportJSON, parseCSV } from '../../utils/export.js'
 import { runWarningEngine } from '../../utils/warning.js'
 
@@ -214,14 +217,26 @@ function saveProfile() {
 }
 
 /* 密码 */
-const pwdForm = ref({ pwd: '', confirm: '' })
-function savePwd() {
+const pwdForm = ref({ oldPwd: '', pwd: '', confirm: '' })
+async function savePwd() {
   if (!pwdForm.value.pwd) return ElMessage.warning('请输入密码')
   if (pwdForm.value.pwd !== pwdForm.value.confirm) return ElMessage.warning('两次输入的密码不一致')
+  if (isServer()) {
+    if (!pwdForm.value.oldPwd) return ElMessage.warning('请输入原密码')
+    try {
+      await authApi.changePassword(pwdForm.value.oldPwd, pwdForm.value.pwd)
+      logsStore.add('修改', '密码设置', '密码已修改')
+      ElMessage.success('密码修改成功')
+      pwdForm.value = { oldPwd: '', pwd: '', confirm: '' }
+    } catch (e) {
+      ElMessage.error((e.response && e.response.data && e.response.data.detail) || '密码修改失败')
+    }
+    return
+  }
   settingsStore.patch('password', { pwd: pwdForm.value.pwd })
   logsStore.add('修改', '密码设置', '已更新')
   ElMessage.success('密码已保存（本地模式为演示）')
-  pwdForm.value = { pwd: '', confirm: '' }
+  pwdForm.value = { oldPwd: '', pwd: '', confirm: '' }
 }
 
 /* 导出 */
@@ -363,3 +378,4 @@ h4 {
   margin: 0 0 8px;
 }
 </style>
+
